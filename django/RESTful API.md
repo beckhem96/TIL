@@ -144,7 +144,17 @@ Create -POST
 
 4. is_valid() 옵션에 raise_exception 에 대해서 한 번 더.....(그리고 왜 기존에는 사용하지 않아도 됐는지)
 
+- 문서화라는게 TMDB에서 제공하는 API 명세서 같은건가요?
 
+  - swagger API doc ⇒ django
+
+- M:N에서 
+
+  serializers.py
+
+   에서 관리하지 않고 폴더로 만들어서 관리하는 이유가 있나요?
+
+  - serializers로 관리하는 것인데 내용이 많아지다보니 파이로 분리하는 것입니다.
 
 
 
@@ -202,3 +212,218 @@ def comment_detail(request, comment_pk):
 ![image-20220421162403596](RESTful API.assets/image-20220421162403596.png)
 
 `article `변경도 시도했으나 `Read Only Field`를 설정해서 안되는 것 같다.
+
+
+
+## pjt08
+
+가상환경, 프로젝트, 앱(movies) 설정 후
+
+## models.py
+
+```python
+from django.db import models
+
+# Create your models here.
+class Actor(models.Model):
+    name = models.CharField(max_length=100)
+    
+class Movie(models.Model):
+    title = models.CharField(max_length=100)
+    overview = models.TextField()
+    release_date = models.DateTimeField()
+    poster_path = models.TextField()
+    actors = models.ManyToManyField(Actor, related_name='movies') # M : N 관계 설정
+	# movies_movie_actors로 생성됨
+    
+class Review(models.Model):
+    title = models.CharField(max_length=100)
+    content = models.TextField()
+    movie = models.ForeignKey(Movie, on_delete=models.CASCADE) # 1 : N 관계 Movie 모델 참조
+```
+
+- 관계 필드를 가지지 않는 모델이 관계 필드를 가진 모델을 참조할 때 사용할  manager의 이름을 설정
+- `related_name`은 역참조 시에 사용하는 manager의 이름을 설정
+
+- ForeignKey의 related_name과 동일
+- related_name 설정 후 기존의 _set manager는 더 이상 사용할 수 없음
+
+
+
+## serializers.py
+
+```python
+from rest_framework import serializers
+from .models import Actor, Movie, Review
+
+# Actor 리스트
+class ActorListSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Actor
+        fields = '__all__'
+        
+# Actor 이름만
+class ActorNameSerializer(serializers.ModelSerializer):
+    
+    class Meta:
+        model = Actor
+        fields = ('name',)
+
+# Review List 
+class ReviewTitleContentListSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Review
+        fields = ('title', 'content',)
+
+        
+# Movie detail
+class MovieSerializer(serializers.ModelSerializer):
+    actors = ActorNameSerializer(many=True, read_only=True) # M : N
+    review_set = ReviewTitleContentListSerializer(many=True, read_only=True) # 1 : N
+    
+    class Meta:
+        model = Movie
+        fields = ('id', 'actors', 'review_set', 'title', 'overview', 'release_date', 'poster_path',)
+
+# Movie 제목만
+class MovieTitleSerializer(serializers.ModelSerializer):
+    
+    class Meta:
+        model = Movie
+        fields = ('title',)
+
+# Actor Detail        
+class ActorSerializer(serializers.ModelSerializer):
+    movies = MovieTitleSerializer(many=True,read_only=True)
+    
+    class Meta:
+        model = Actor
+        fields = ('id', 'movies', 'name',)
+        
+# Movie List
+class MovieListSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Movie
+        fields = ('title', 'overview',)
+
+# Review Detail
+class ReviewSerializer(serializers.ModelSerializer):
+    movie = MovieTitleSerializer(read_only=True) 
+    # many=True없는 이유
+    # 'many' argument는 단일 인스턴스 대신 QuerySet 등을 직렬화하기 위해서 serializer을 인스턴스화 할 떄 필요함
+    # 여기서는 movie의 QeurySet이 아닌 단일 인스턴스가 필요하해서 many 인자를 없앰
+    
+    class Meta:
+        model = Review
+        fields = ('id', 'movie', 'title', 'content',)
+
+# Review List 
+class ReviewListSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Review
+        fields = ('title', 'content',)
+
+```
+
+
+
+결과 화면 출력하는 과정에서 오류가 많이 났다. 원하는 값만 출력하려면 새로운 `serializer`를 만들어야한다.
+
+
+
+## urls.py
+
+```python
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('actors/', views.actor_list),
+    path('actors/<int:actor_pk>/', views.actor_detail),
+    path('movies/', views.movie_list),
+    path('movies/<int:movie_pk>/', views.movie_detail),
+    path('reviews/', views.review_list),
+    path('reviews/<int:review_pk>/', views.review_detail),
+    path('movies/<int:movie_pk>/reviews/', views.create_review),
+]
+```
+
+
+
+## views.py
+
+```python
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.decorators import api_view
+from django.shortcuts import get_list_or_404, get_object_or_404
+from .serializers import ActorListSerializer, ActorSerializer, MovieSerializer, MovieListSerializer, ReviewListSerializer, ReviewSerializer
+from .models import Actor, Movie, Review
+from movies import serializers
+
+
+# Create your views here.
+@api_view(['GET'])
+def actor_list(request):
+    actors = get_list_or_404(Actor) # 모델의 set을 쓴다면 list
+    serializer = ActorListSerializer(actors, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+def actor_detail(request, actor_pk):
+    actor = get_object_or_404(Actor, pk=actor_pk) # 모델의 단일 인스턴스를 쓰면 object
+    serializer = ActorSerializer(actor)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+def movie_list(request):
+    movies = get_list_or_404(Movie)
+    serializer = MovieListSerializer(movies, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+def movie_detail(request, movie_pk):
+    movie = get_object_or_404(Movie, pk=movie_pk)
+    serializer = MovieSerializer(movie)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+def review_list(request):
+    reviews = get_list_or_404(Review)
+    serializer = ReviewListSerializer(reviews, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET', 'PUT', 'DELETE'])
+def review_detail(request, review_pk):
+    review = get_object_or_404(Review, pk=review_pk)
+    if request.method == 'GET':
+        serializer = ReviewSerializer(review)
+        return Response(serializer.data)
+    
+    elif request.method == 'PUT':
+        serializer = ReviewSerializer(review, request.data)
+        if serializer.is_valid(raise_exception=True):
+            serializer.save()
+            return Response(serializer.data)
+    
+    elif request.method == 'DELETE':
+        review.delete()
+        data = {
+            'delete': f'리뷰 {review_pk}번이 삭제됨',
+        }
+        return Response(data, status=status.HTTP_204_NO_CONTENT)
+
+@api_view(['POST'])
+def create_review(request, movie_pk):
+    movie = get_object_or_404(Movie, pk=movie_pk)
+    serializer = ReviewSerializer(data=request.data)
+    if serializer.is_valid(raise_exception=True):
+        serializer.save(movie=movie) 
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+```
+
+## 

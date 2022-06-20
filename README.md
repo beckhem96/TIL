@@ -1,5 +1,5 @@
 # TIL
 
 ## 목차 테스트
-- [SQL](SQL/DB(SQL).md)
-- 
+- [DB](SQL/DB(SQL).md)
+- [SQL](SQL)
